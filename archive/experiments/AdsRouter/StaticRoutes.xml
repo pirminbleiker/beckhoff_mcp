@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcConfig xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://www.beckhoff.com/schemas/2015/12/TcConfig">
+  <Local>
+    <Name>BeckhoffMcpRouter</Name>
+    <NetId>192.168.71.5.1.1</NetId>
+  </Local>
+  <RemoteConnections>
+    <Mqtt Unidirectional="false">
+      <Address Port="1883">192.168.71.38</Address>
+      <Topic>AdsOverMqtt</Topic>
+    </Mqtt>
+  </RemoteConnections>
+</TcConfig>

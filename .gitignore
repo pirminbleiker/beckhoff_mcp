@@ -1,0 +1,23 @@
+# .NET
+bin/
+obj/
+publish/
+*.user
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# Local artifacts
+*.log
+/tmp/
+*.bak
+
+# Proprietary Beckhoff DLLs (EULA-restricted)
+archive/experiments/TwinCAT/

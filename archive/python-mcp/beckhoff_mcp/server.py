@@ -28,7 +28,7 @@ from mcp.server.fastmcp import FastMCP, Context
 # ==============================================================================
 
 # Default connection settings
-AMS_NET_ID = "127.0.0.1.1.1"  # Localhost AMS Net ID
+AMS_NET_ID = "169.254.34.222.1.1"  # PLC AMS Net ID
 AMS_PORT = pyads.PORT_TC3PLC1  # 851 - TwinCAT 3 PLC Runtime 1
 
 # ADS state code to human-readable name mapping

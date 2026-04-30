@@ -169,23 +169,45 @@ public sealed class DiscoveryTools
 
     [McpServerTool(Name = "beckhoff_connect"),
      Description("Set the active target (NetId + ADS port) and probe both the requested port AND SystemService (10000) " +
-                 "in one call. Returns: PLC runtime status (device info + AdsState) for the target_port, plus " +
-                 "SystemService status (always 10000) for diagnostic context. Optional MQTT broker/topic overrides apply at runtime.")]
+                 "in one call. Two transports: 'mqtt' (default, AdsOverMqtt plugin — no router needed) and 'tcp' " +
+                 "(in-process AmsTcpIpRouter, requires target_ip and a backroute on the PLC for our local NetId). " +
+                 "Returns: PLC runtime status for target_port, SystemService status (always 10000), plus the active transport.")]
     public async Task<object> Connect(
         [Description("Target AmsNetId (e.g. '169.254.34.222.1.1')")] string target_net_id,
         [Description("Target ADS port — typically 851 (PLC Runtime 1), 852 (PLC2), 0xFFFF (EtherCAT). Default 851.")] int target_port = 851,
-        [Description("Optional MQTT broker host override.")] string? mqtt_broker = null,
-        [Description("Optional MQTT broker port override.")] int? mqtt_port = null,
-        [Description("Optional MQTT topic root override (default 'AdsOverMqtt').")] string? mqtt_topic = null,
+        [Description("Transport: 'mqtt' (default) or 'tcp'.")] string transport = "mqtt",
+        [Description("Required for transport='tcp': IP/hostname of the PLC. Ignored for MQTT.")] string? target_ip = null,
+        [Description("Optional route name for the registered TCP_IP route. Defaults to 'mcp-<netId>'.")] string? route_name = null,
+        [Description("MQTT broker host override (transport='mqtt').")] string? mqtt_broker = null,
+        [Description("MQTT broker port override (transport='mqtt').")] int? mqtt_port = null,
+        [Description("MQTT topic root override (transport='mqtt'). Default 'AdsOverMqtt'.")] string? mqtt_topic = null,
+        [Description("Probe timeout per port (ms). Default 10000. Bound the wait so a missing TCP backroute fails fast.")] int probe_timeout_ms = 10000,
         CancellationToken ct = default)
     {
         bool overrideApplied = false;
+        var t = (transport ?? "mqtt").Trim().ToLowerInvariant();
         try
         {
-            // Establish active session on the requested port and probe it.
-            var conn = _ads.Configure(target_net_id, target_port,
-                mqtt_broker, mqtt_port, mqtt_topic, out overrideApplied);
-            var runtime = await ProbePortAsync(conn, ct);
+            TwinCAT.Ads.IAdsConnection conn;
+            if (t == "tcp")
+            {
+                if (string.IsNullOrWhiteSpace(target_ip))
+                    return new
+                    {
+                        success = false,
+                        error = "transport='tcp' requires target_ip (IP/hostname of the PLC).",
+                        hint = "Use beckhoff_discover_network to find the IP for a given AmsNetId.",
+                    };
+                conn = _ads.ConfigureTcp(target_net_id, target_port, target_ip!, route_name);
+                overrideApplied = true;
+            }
+            else
+            {
+                conn = _ads.Configure(target_net_id, target_port,
+                    mqtt_broker, mqtt_port, mqtt_topic, out overrideApplied);
+            }
+
+            var runtime = await ProbePortAsync(conn, probe_timeout_ms, ct);
 
             // Always also probe the SystemService on port 10000 — it should
             // answer for any reachable Beckhoff target and tells us what kind
@@ -194,7 +216,7 @@ public sealed class DiscoveryTools
             try
             {
                 var sysConn = _ads.EnsureConnectedToPort(10000);
-                systemService = await ProbePortAsync(sysConn, ct);
+                systemService = await ProbePortAsync(sysConn, probe_timeout_ms, ct);
             }
             catch (Exception ex)
             {
@@ -206,6 +228,14 @@ public sealed class DiscoveryTools
                 success = true,
                 target_net_id,
                 target_port,
+                transport = _ads.ActiveTransport.ToString().ToLowerInvariant(),
+                target_ip = t == "tcp" ? target_ip : null,
+                tcp_router_running = _ads.TcpRouterRunning,
+                local_net_id = _ads.LocalNetId,
+                local_name = _ads.LocalName,
+                backroute_hint = t == "tcp"
+                    ? $"For TCP transport the PLC must have a static <Route> entry for our NetId '{_ads.LocalNetId}'. Without it the PLC silently drops AMS frames (visible as ClientSyncTimeOut)."
+                    : null,
                 mqtt_override_applied = overrideApplied,
                 active_broker = _ads.ActiveMqttBroker,
                 active_port = _ads.ActiveMqttPort,
@@ -221,21 +251,28 @@ public sealed class DiscoveryTools
                 success = false,
                 target_net_id,
                 target_port,
+                transport = t,
+                target_ip,
+                local_net_id = _ads.LocalNetId,
                 mqtt_override_applied = overrideApplied,
                 active_broker = _ads.ActiveMqttBroker,
                 active_topic = _ads.ActiveMqttTopic,
                 error = ex.Message,
-                hint = "Verify the AmsNetId is reachable via the configured MQTT broker. Use beckhoff_discover to list peers.",
+                hint = t == "tcp"
+                    ? $"Verify target_ip:48898 is reachable AND the PLC has a static backroute for our local AmsNetId '{_ads.LocalNetId}'. Add a <Route> with NetId='{_ads.LocalNetId}' Type='TCP_IP' on the PLC, otherwise AMS frames are silently dropped."
+                    : "Verify the AmsNetId is reachable via the configured MQTT broker. Use beckhoff_discover to list peers.",
             };
         }
     }
 
-    /// <summary>Reads device info + ADS state for a connection, returns a status record.</summary>
-    private static async Task<object> ProbePortAsync(TwinCAT.Ads.IAdsConnection conn, CancellationToken ct)
+    /// <summary>Reads device info + ADS state for a connection, capped by <paramref name="timeoutMs"/>.</summary>
+    private static async Task<object> ProbePortAsync(TwinCAT.Ads.IAdsConnection conn, int timeoutMs, CancellationToken ct)
     {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1000, timeoutMs)));
         try
         {
-            var info = await conn.ReadDeviceInfoAsync(ct);
+            var info = await conn.ReadDeviceInfoAsync(timeoutCts.Token);
             object? device = info.Succeeded
                 ? new
                 {
@@ -244,7 +281,7 @@ public sealed class DiscoveryTools
                 }
                 : null;
 
-            var state = await conn.ReadStateAsync(ct);
+            var state = await conn.ReadStateAsync(timeoutCts.Token);
             object? stateInfo = state.Succeeded
                 ? new
                 {

@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0). If the tag does not exist, it will be created from the current ref.'
+        required: true
+        default: 'v0.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tag = $env:GITHUB_REF -replace 'refs/tags/', ''
+          } else {
+            $tag = '${{ github.event.inputs.tag }}'
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw 'No tag resolved' }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Release tag: $tag"
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish (Release, win-x64, self-contained)
+        shell: pwsh
+        working-directory: src/BeckhoffMcp.Server
+        run: |
+          dotnet publish -c Release -r win-x64 --self-contained true -o publish
+          if (-not (Test-Path 'publish/beckhoff-mcp.exe')) {
+            throw 'beckhoff-mcp.exe not found in publish output'
+          }
+
+      - name: Stage release artefacts
+        shell: pwsh
+        run: |
+          $stageRoot = 'release-stage'
+          $stageDir  = Join-Path $stageRoot 'beckhoff-mcp'
+          New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+          # Self-contained build: copy entire publish folder so the MEF plugin
+          # (Beckhoff.TwinCAT.Ads.AdsOverMqtt.dll) and the .NET runtime sit next
+          # to beckhoff-mcp.exe.
+          Copy-Item 'src/BeckhoffMcp.Server/publish/*' $stageDir -Recurse -Force
+          # Drop any user-secrets style files, just in case.
+          Remove-Item (Join-Path $stageDir '*.user') -ErrorAction SilentlyContinue
+          # Carry the docs into the zip so users can read them offline.
+          Copy-Item 'README.md','ARCHITECTURE.md','LICENSE' $stageDir -ErrorAction SilentlyContinue
+          $zipName = "beckhoff-mcp-${{ steps.tag.outputs.tag }}-win-x64.zip"
+          Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipName
+          (Get-FileHash $zipName -Algorithm SHA256).Hash | Out-File "$zipName.sha256"
+          Get-ChildItem $zipName, "$zipName.sha256" | ForEach-Object { Write-Host "$($_.Name)  $($_.Length) bytes" }
+          "zip=$zipName"            | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sha=$zipName.sha256"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: stage
+
+      - name: Create / update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.stage.outputs.zip }}
+            ${{ steps.stage.outputs.sha }}

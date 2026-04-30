@@ -23,7 +23,17 @@ Communicates with PLCs over **ADS-over-MQTT** (TF6720) using Beckhoff's official
 
 ## Quick start
 
-### 1. Build
+### 1. Get the binary
+
+**Option A — download a release (recommended):**
+
+Grab `beckhoff-mcp-<version>-win-x64.zip` from the [Releases page](../../releases),
+extract it anywhere (e.g. `C:\Tools\beckhoff-mcp\`). The folder contains
+`beckhoff-mcp.exe`, `appsettings.json`, the .NET 8 runtime and the
+`Beckhoff.TwinCAT.Ads.AdsOverMqtt.dll` plugin — everything needed, no
+TwinCAT install required.
+
+**Option B — build from source:**
 
 ```powershell
 cd src/BeckhoffMcp.Server
@@ -34,7 +44,7 @@ Output: `src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe` (self-contained .NET 8
 
 ### 2. Configure
 
-`src/BeckhoffMcp.Server/publish/appsettings.json`:
+`appsettings.json` (sits next to `beckhoff-mcp.exe`):
 
 ```json
 {
@@ -70,11 +80,14 @@ default target — every tool can override at runtime via `beckhoff_connect`.
 {
   "mcpServers": {
     "beckhoff": {
-      "command": "D:\\path\\to\\beckhoff-mcp.exe"
+      "command": "C:\\Tools\\beckhoff-mcp\\beckhoff-mcp.exe"
     }
   }
 }
 ```
+
+The path must point at the extracted `beckhoff-mcp.exe`. The MCP picks up
+`appsettings.json` from the directory next to the exe.
 
 ### 4. Verify
 
@@ -171,6 +184,17 @@ The trade-off: client code is C#, not Python. The full `archive/` folder
 documents the experiments (custom TCP router, custom TCP↔MQTT bridge, drop-in
 DLL replacement) that explored other paths before settling on the .NET
 direct-broker route.
+
+## Releases
+
+Releases are produced by `.github/workflows/release.yml`:
+
+- Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`),
+  or trigger the workflow manually from the **Actions** tab and supply a tag.
+- The workflow runs on `windows-latest`, runs `dotnet publish -c Release
+  -r win-x64 --self-contained true`, zips the publish folder together with
+  the docs, and attaches it to the GitHub release as
+  `beckhoff-mcp-<tag>-win-x64.zip` plus a `.sha256` checksum.
 
 ## License
 

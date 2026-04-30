@@ -91,7 +91,7 @@ def truthy(obj, *keys):
     return True
 
 
-def run_target(label, connect_args, sample_path, port_851_active=True):
+def run_target(label, connect_args, sample_path, port_851_active=True, add_route=None):
     print()
     print("=" * 78)
     print(f" {label}")
@@ -106,6 +106,12 @@ def run_target(label, connect_args, sample_path, port_851_active=True):
         status(name, ok, detail, skip=skip)
 
     try:
+        # === Optional: register a temporary backroute before connecting via TCP ===
+        if add_route:
+            r = c.call("beckhoff_add_route", add_route, timeout=120.0)
+            record("add_route", r.get("success") is True,
+                   f"action={r.get('action')} temporary={r.get('temporary')} vault={r.get('used_saved_credentials')}")
+
         # === Connect & Status ===
         r = c.call("beckhoff_connect", connect_args)
         rt_ok = (r.get("runtime") or {}).get("ok", False)
@@ -264,9 +270,11 @@ for ctx in [
          connect_args={"target_net_id": "175.57.15.0.1.1", "target_port": 851,
                        "mqtt_broker": "127.0.0.1", "mqtt_port": 1883, "mqtt_topic": "AdsOverMqtt"},
          sample_path=None, port_851_active=False),
-    dict(label="Target 3: ENGINEERING HOST  172.18.164.255.1.1  (broker 192.168.71.38)",
+    dict(label="Target 3: ENGINEERING VM  172.18.164.255.1.1  (TCP via temporary backroute)",
          connect_args={"target_net_id": "172.18.164.255.1.1", "target_port": 851,
-                       "mqtt_broker": "192.168.71.38", "mqtt_port": 1883, "mqtt_topic": "AdsOverMqtt"},
+                       "transport": "tcp", "target_ip": "172.23.103.131"},
+         add_route={"target_net_id": "172.18.164.255.1.1", "target_ip": "172.23.103.131",
+                    "temporary": True, "timeout_ms": 4000},
          sample_path=None, port_851_active=True),
 ]:
     res = run_target(**ctx)

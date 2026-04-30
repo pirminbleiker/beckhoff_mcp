@@ -17,6 +17,8 @@
     <PackageReference Include="Beckhoff.TwinCAT.Ads" Version="7.0.*" />
     <PackageReference Include="Beckhoff.TwinCAT.Ads.AdsOverMqtt" Version="7.0.*" />
     <PackageReference Include="Beckhoff.TwinCAT.Ads.ConfigurationProviders" Version="7.0.*" />
+    <PackageReference Include="Beckhoff.TwinCAT.Ads.TcpRouter" Version="7.0.*" />
+    <PackageReference Include="Beckhoff.TwinCAT.Ads.SystemServer" Version="7.0.*" />
     <PackageReference Include="MQTTnet" Version="4.3.*" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.*" />

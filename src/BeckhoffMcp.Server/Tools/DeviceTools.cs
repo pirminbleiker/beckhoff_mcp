@@ -77,11 +77,15 @@ public sealed class DeviceTools
     }
 
     [McpServerTool(Name = "beckhoff_connection_status"),
-     Description("Get current connection status and active target.")]
+     Description("Get current connection status and active target. Includes the local AmsNetId — register that NetId on the PLC's StaticRoutes for TCP transport to work.")]
     public object GetConnectionStatus() => new
     {
         connected = _ads.IsConnected,
         target_net_id = _ads.TargetNetId,
         target_port = _ads.TargetPort,
+        transport = _ads.ActiveTransport.ToString().ToLowerInvariant(),
+        tcp_router_running = _ads.TcpRouterRunning,
+        local_net_id = _ads.LocalNetId,
+        local_name = _ads.LocalName,
     };
 }

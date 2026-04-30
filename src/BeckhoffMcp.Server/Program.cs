@@ -26,6 +26,9 @@ public static class Program
         builder.Services.AddSingleton<AdsConnectionManager>();
         builder.Services.AddSingleton<NetworkDiscovery>();
         builder.Services.AddSingleton<TraceService>();
+        builder.Services.AddSingleton<RouteRegistration>();
+        if (OperatingSystem.IsWindows())
+            builder.Services.AddSingleton<WindowsCredentialPrompt>();
 
         builder.Services
             .AddMcpServer()

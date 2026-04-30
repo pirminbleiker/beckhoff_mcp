@@ -10,10 +10,24 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
-        var builder = Host.CreateApplicationBuilder(args);
+        // Anchor the content root to the directory the exe lives in. Without
+        // this the host uses Directory.GetCurrentDirectory(), which means
+        // appsettings.json is missed when Claude Desktop launches the MCP
+        // from a different cwd (e.g. %USERPROFILE%).
+        var exeDir = AppContext.BaseDirectory;
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            ContentRootPath = exeDir,
+            Args = args,
+        });
 
+        // Load appsettings.json explicitly from the exe directory so it works
+        // regardless of cwd. BECKHOFF_MCP_APPSETTINGS env var lets the user
+        // override the path entirely.
+        var configPath = Environment.GetEnvironmentVariable("BECKHOFF_MCP_APPSETTINGS")
+                         ?? Path.Combine(exeDir, "appsettings.json");
         builder.Configuration
-            .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile(configPath, optional: false, reloadOnChange: false)
             .AddEnvironmentVariables("BECKHOFF_MCP_")
             .AddCommandLine(args);
 

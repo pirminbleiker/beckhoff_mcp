@@ -27,11 +27,10 @@ Communicates with PLCs over **ADS-over-MQTT** (TF6720) using Beckhoff's official
 
 **Option A — download a release (recommended):**
 
-Grab `beckhoff-mcp-<version>-win-x64.zip` from the [Releases page](../../releases),
-extract it anywhere (e.g. `C:\Tools\beckhoff-mcp\`). The folder contains
-`beckhoff-mcp.exe`, `appsettings.json`, the .NET 8 runtime and the
-`Beckhoff.TwinCAT.Ads.AdsOverMqtt.dll` plugin — everything needed, no
-TwinCAT install required.
+Grab `beckhoff-mcp-<version>-win-x64.exe` from the [Releases page](../../releases)
+and put it anywhere (e.g. `C:\Tools\beckhoff-mcp.exe`). It is a single
+self-contained .NET 8 file — no install, no TwinCAT prerequisite, no
+companion DLLs to copy.
 
 **Option B — build from source:**
 
@@ -40,11 +39,15 @@ cd src/BeckhoffMcp.Server
 dotnet publish -c Release -o publish
 ```
 
-Output: `src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe` (self-contained .NET 8 win-x64).
+Output: `src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe` (single-file, self-contained).
 
-### 2. Configure
+### 2. Configure (optional)
 
-`appsettings.json` (sits next to `beckhoff-mcp.exe`):
+The exe ships with an embedded default `appsettings.json` and runs out of
+the box. To override anything persistently, drop a real `appsettings.json`
+next to the exe — the program merges it on top of the embedded defaults.
+
+Example `appsettings.json`:
 
 ```json
 {
@@ -69,8 +72,19 @@ Output: `src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe` (self-contained .NET 8
 }
 ```
 
-`AmsRouter:NetId` is auto-generated if missing. `Beckhoff:TargetNetId` is the
-default target — every tool can override at runtime via `beckhoff_connect`.
+`AmsRouter:NetId` is auto-generated on first launch if missing — the
+program writes the generated value into the on-disk `appsettings.json` so
+the same identity persists across restarts (important: a backroute on the
+PLC stays valid). `Beckhoff:TargetNetId` is the default target; every tool
+can override at runtime via `beckhoff_connect`.
+
+Override file lookup order (later wins):
+
+1. embedded default (in the exe)
+2. `appsettings.json` next to the exe
+3. file pointed at by `BECKHOFF_MCP_APPSETTINGS` env var
+4. `BECKHOFF_MCP_*` env vars
+5. command line args (e.g. `--Beckhoff:TargetNetId=...`)
 
 ### 3. Register with Claude Desktop
 
@@ -191,10 +205,10 @@ Releases are produced by `.github/workflows/release.yml`:
 
 - Push a tag matching `v*` (e.g. `git tag v0.1.0 && git push origin v0.1.0`),
   or trigger the workflow manually from the **Actions** tab and supply a tag.
-- The workflow runs on `windows-latest`, runs `dotnet publish -c Release
-  -r win-x64 --self-contained true`, zips the publish folder together with
-  the docs, and attaches it to the GitHub release as
-  `beckhoff-mcp-<tag>-win-x64.zip` plus a `.sha256` checksum.
+- The workflow runs on `windows-latest`, runs `dotnet publish -c Release`
+  (which produces a single self-contained exe via the csproj's
+  `PublishSingleFile` + `IncludeAllContentForSelfExtract` settings), and
+  attaches `beckhoff-mcp-<tag>-win-x64.exe` plus a `.sha256` to the release.
 
 ## License
 

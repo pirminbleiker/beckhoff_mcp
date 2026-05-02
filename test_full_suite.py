@@ -5,7 +5,9 @@ import sys
 import time
 from pathlib import Path
 
-EXE = Path(r"D:/Projects/Open Source/beckhoff_mcp/src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe")
+import os
+EXE = Path(os.environ.get("BECKHOFF_MCP_EXE",
+    r"D:/Projects/Open Source/beckhoff_mcp/src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe"))
 
 
 class McpClient:

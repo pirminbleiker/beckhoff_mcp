@@ -8,8 +8,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>true</SelfContained>
+    <!--
+      Single-file with full self-extract: .NET 8 unpacks every bundled file
+      (managed DLLs, native libs, content) into %TEMP%/.net/<hash>/ on first
+      launch. Beckhoff's MEF plugin discovery uses Assembly.Location to find
+      the plugin directory; with self-extract, Location points at the temp
+      dir where TwinCAT.Ads.AdsOverMqtt.dll also sits, so MEF works.
+    -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,9 +37,24 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="appsettings.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
-    </None>
+    <!--
+      Default appsettings ships embedded inside the single-file exe. A user
+      can drop a real appsettings.json next to beckhoff-mcp.exe to override
+      persistently (the program prefers the on-disk file when it exists).
+    -->
+    <EmbeddedResource Include="appsettings.json">
+      <LogicalName>BeckhoffMcp.Server.appsettings.json</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
+
+  <!--
+    PublishSingleFile is intentionally false. Beckhoff's TwinCAT.Ads.Server
+    composition does
+        Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+    to locate the MEF plugin directory, which yields null for assemblies
+    loaded from a single-file bundle. The result is a SafeDirectoryCatalog
+    crash and "No IAmsServerFactory for protocol AdsOverMqtt:All found".
+    Until that's fixed upstream we ship as multi-file so MEF can discover
+    AdsOverMqtt.dll on disk.
+  -->
 </Project>

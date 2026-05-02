@@ -43,35 +43,29 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish (Release, win-x64, self-contained)
+      - name: Publish (Release, win-x64, single-file, self-contained)
         shell: pwsh
         working-directory: src/BeckhoffMcp.Server
         run: |
-          dotnet publish -c Release -r win-x64 --self-contained true -o publish
+          dotnet publish -c Release -o publish
           if (-not (Test-Path 'publish/beckhoff-mcp.exe')) {
             throw 'beckhoff-mcp.exe not found in publish output'
+          }
+          $files = Get-ChildItem publish
+          if ($files.Count -ne 1 -or $files[0].Name -ne 'beckhoff-mcp.exe') {
+            throw "Expected a single exe in publish/, got: $($files | ForEach-Object Name -join ', ')"
           }
 
       - name: Stage release artefacts
         shell: pwsh
         run: |
-          $stageRoot = 'release-stage'
-          $stageDir  = Join-Path $stageRoot 'beckhoff-mcp'
-          New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
-          # Self-contained build: copy entire publish folder so the MEF plugin
-          # (Beckhoff.TwinCAT.Ads.AdsOverMqtt.dll) and the .NET runtime sit next
-          # to beckhoff-mcp.exe.
-          Copy-Item 'src/BeckhoffMcp.Server/publish/*' $stageDir -Recurse -Force
-          # Drop any user-secrets style files, just in case.
-          Remove-Item (Join-Path $stageDir '*.user') -ErrorAction SilentlyContinue
-          # Carry the docs into the zip so users can read them offline.
-          Copy-Item 'README.md','ARCHITECTURE.md','LICENSE' $stageDir -ErrorAction SilentlyContinue
-          $zipName = "beckhoff-mcp-${{ steps.tag.outputs.tag }}-win-x64.zip"
-          Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipName
-          (Get-FileHash $zipName -Algorithm SHA256).Hash | Out-File "$zipName.sha256"
-          Get-ChildItem $zipName, "$zipName.sha256" | ForEach-Object { Write-Host "$($_.Name)  $($_.Length) bytes" }
-          "zip=$zipName"            | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "sha=$zipName.sha256"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $exeName = "beckhoff-mcp-$tag-win-x64.exe"
+          Copy-Item 'src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe' $exeName
+          (Get-FileHash $exeName -Algorithm SHA256).Hash | Out-File "$exeName.sha256"
+          Get-ChildItem $exeName, "$exeName.sha256" | ForEach-Object { Write-Host "$($_.Name)  $($_.Length) bytes" }
+          "exe=$exeName"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sha=$exeName.sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: stage
 
       - name: Create / update GitHub release
@@ -82,5 +76,5 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            ${{ steps.stage.outputs.zip }}
+            ${{ steps.stage.outputs.exe }}
             ${{ steps.stage.outputs.sha }}

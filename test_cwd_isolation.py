@@ -11,7 +11,10 @@ import tempfile
 import time
 from pathlib import Path
 
-EXE = Path(r"D:/Projects/Open Source/beckhoff_mcp/src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe").resolve()
+import os
+EXE = Path(os.environ.get("BECKHOFF_MCP_EXE",
+    r"D:/Projects/Open Source/beckhoff_mcp/src/BeckhoffMcp.Server/publish/beckhoff-mcp.exe")).resolve()
+print(f"EXE = {EXE}")
 
 with tempfile.TemporaryDirectory() as tmp:
     print(f"Launching MCP from cwd={tmp} (no appsettings.json present here).")

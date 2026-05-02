@@ -97,12 +97,13 @@ public sealed class AdsConnectionManager : IAsyncDisposable
         try
         {
             var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-            if (!File.Exists(path))
-            {
-                _log.LogWarning("Cannot persist NetId — appsettings.json not found at {Path}", path);
-                return;
-            }
-            var json = File.ReadAllText(path);
+            // Bootstrap a minimal file if none exists yet — the disk override
+            // is optional but persisting the generated NetId there means the
+            // next launch picks the same identity (so a backroute on the PLC
+            // keeps matching).
+            string json = File.Exists(path)
+                ? File.ReadAllText(path)
+                : "{}";
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement.Clone();
 

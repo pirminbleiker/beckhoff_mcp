@@ -13,6 +13,12 @@ public enum AdsTransport
     Mqtt,
     /// <summary>Plain ADS over TCP/IP (port 48898). Requires an in-process AmsTcpIpRouter and a backroute on the PLC.</summary>
     Tcp,
+    /// <summary>Defer to a TwinCAT router already installed on this machine.
+    /// The MCP starts no router and adds no AdsOverMqtt override; the
+    /// Beckhoff.TwinCAT.Ads library auto-detects the installed router
+    /// (PInvoke / UnixSocket / TCP loopback to 48898) and uses the routes
+    /// the installed router already knows about.</summary>
+    LocalRouter,
 }
 
 /// <summary>
@@ -48,10 +54,13 @@ public sealed class AdsConnectionManager : IAsyncDisposable
     private CancellationTokenSource? _tcpRouterCts;
     private Task? _tcpRouterTask;
 
-    public AdsConnectionManager(IConfiguration config, ILoggerFactory loggerFactory)
+    private readonly LocalRouterDetector? _localRouter;
+
+    public AdsConnectionManager(IConfiguration config, ILoggerFactory loggerFactory, LocalRouterDetector? localRouter = null)
     {
         _baseConfig = config;
         _loggerFactory = loggerFactory;
+        _localRouter = localRouter;
         _log = loggerFactory.CreateLogger<AdsConnectionManager>();
 
         // A stable local AmsNetId is required: the PLC's <Route> entry must
@@ -222,6 +231,62 @@ public sealed class AdsConnectionManager : IAsyncDisposable
     }
 
     /// <summary>
+    /// Atomic reconfigure for the "use the installed local router" transport.
+    /// No in-process router is started; no MQTT plugin is wired. We drop
+    /// our channel/MQTT overrides so the Beckhoff library reverts to its
+    /// default channel discovery and talks to the installed router via
+    /// whichever IPC (PInvoke / UnixSocket / TCP loopback to 48898) it
+    /// finds. The target NetId must be one the installed router already
+    /// has a route for — we don't push a route, the user (or XAE) has.
+    /// </summary>
+    public IAdsConnection ConfigureLocalRouter(string netId, int port)
+    {
+        lock (_lock)
+        {
+            if (!AmsNetId.TryParse(netId, out var amsNetId))
+                throw new ArgumentException($"Invalid AmsNetId: {netId}");
+
+            // Tear down anything we may have stood up for MQTT or in-process
+            // TCP — we explicitly want the library on its default discovery.
+            DisposeSessionLocked();
+            StopTcpRouterLocked();
+            ClearTcpOverridesLocked();
+            // The embedded appsettings.json defaults ChannelProtocol to
+            // "AdsOverMqtt", so we must positively override it back to "Ads"
+            // (i.e. plain ADS, default channel discovery — PInvoke / UnixSocket
+            // / loopback to 48898). Just removing the override key would let
+            // the embedded default bleed through and the MQTT plugin would
+            // still get wired up.
+            _overrides["AmsRouter:ChannelProtocol"] = "Ads";
+            _overrides.Remove("AmsRouter:Mqtt:0:Address");
+            _overrides.Remove("AmsRouter:Mqtt:0:Port");
+            _overrides.Remove("AmsRouter:Mqtt:0:Topic");
+
+            // If the installed router advertised its NetId via registry,
+            // use it as our local NetId — that's the one the installed
+            // router will accept frames from, with no extra route needed.
+            var installedNetId = _localRouter?.InstalledNetId;
+            if (!string.IsNullOrWhiteSpace(installedNetId))
+                _overrides["AmsRouter:NetId"] = installedNetId;
+
+            RebuildConfigLocked();
+
+            _intentTargetNetId = netId;
+            _intentTargetPort = port;
+
+            var addr = new AmsAddress(amsNetId, port);
+            _log.LogInformation("Configure (LocalRouter) → opening AdsSession to {Address} via installed TwinCAT router (local NetId={Local})",
+                addr, installedNetId ?? _config.GetValue<string>("AmsRouter:NetId") ?? "(unset)");
+            _session = new AdsSession(addr, SessionSettings.Default, _config, _loggerFactory, null);
+            _connection = (IAdsConnection)_session.Connect();
+            _currentTargetNetId = netId;
+            _currentTargetPort = port;
+            _activeTransport = AdsTransport.LocalRouter;
+            return _connection;
+        }
+    }
+
+    /// <summary>
     /// Atomic full reconfigure for the TCP transport: starts (or reuses) an
     /// in-process AmsTcpIpRouter, registers a TCP_IP route to <paramref name="targetIp"/>,
     /// then opens a fresh AdsSession that talks to the router via loopback.
@@ -289,6 +354,15 @@ public sealed class AdsConnectionManager : IAsyncDisposable
     private void EnsureTcpRouterStartedLocked()
     {
         if (_tcpRouter is { IsRunning: true }) return;
+
+        // If another router (typically the installed TwinCAT system service)
+        // already owns port 48898, our AmsTcpIpRouter cannot start. Fail
+        // fast with a hint instead of letting the bind error surface as an
+        // opaque crash inside StartAsync.
+        if (_localRouter is { Port48898InUse: true } or { TcSysSrvRunning: true })
+            throw new InvalidOperationException(
+                $"Cannot start in-process AmsTcpIpRouter: a local Beckhoff router is already running ({_localRouter.Reason}). " +
+                "Use transport='local' to defer to the installed router and its existing routes.");
 
         // Drop any previous instance — if it's not running, recreate it.
         StopTcpRouterLocked();

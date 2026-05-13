@@ -15,13 +15,15 @@ public sealed class DiscoveryTools
 {
     private readonly AdsConnectionManager _ads;
     private readonly NetworkDiscovery _network;
+    private readonly LocalRouterDetector _localRouter;
     private readonly IConfiguration _config;
     private readonly ILogger<DiscoveryTools> _log;
 
-    public DiscoveryTools(AdsConnectionManager ads, NetworkDiscovery network, IConfiguration config, ILoggerFactory lf)
+    public DiscoveryTools(AdsConnectionManager ads, NetworkDiscovery network, LocalRouterDetector localRouter, IConfiguration config, ILoggerFactory lf)
     {
         _ads = ads;
         _network = network;
+        _localRouter = localRouter;
         _config = config;
         _log = lf.CreateLogger<DiscoveryTools>();
     }
@@ -169,14 +171,18 @@ public sealed class DiscoveryTools
 
     [McpServerTool(Name = "beckhoff_connect"),
      Description("Set the active target (NetId + ADS port) and probe both the requested port AND SystemService (10000) " +
-                 "in one call. Two transports: 'mqtt' (default, AdsOverMqtt plugin — no router needed) and 'tcp' " +
-                 "(in-process AmsTcpIpRouter, requires target_ip and a backroute on the PLC for our local NetId). " +
+                 "in one call. Three transports: 'mqtt' (default, AdsOverMqtt plugin — no router needed), 'tcp' " +
+                 "(in-process AmsTcpIpRouter, requires target_ip and a backroute on the PLC for our local NetId), " +
+                 "and 'local' (defer to an already-installed TwinCAT router on this machine — uses the routes the " +
+                 "installed router already knows, no in-process router, no MQTT). " +
+                 "Use 'local' when port 48898 is already bound or the TwinCAT system service (TcSysSrv) is running; " +
+                 "the response always reports local_router_detected so the agent can decide. " +
                  "Returns: PLC runtime status for target_port, SystemService status (always 10000), plus the active transport.")]
     public async Task<object> Connect(
         [Description("Target AmsNetId (e.g. '169.254.34.222.1.1')")] string target_net_id,
         [Description("Target ADS port — typically 851 (PLC Runtime 1), 852 (PLC2), 0xFFFF (EtherCAT). Default 851.")] int target_port = 851,
-        [Description("Transport: 'mqtt' (default) or 'tcp'.")] string transport = "mqtt",
-        [Description("Required for transport='tcp': IP/hostname of the PLC. Ignored for MQTT.")] string? target_ip = null,
+        [Description("Transport: 'mqtt' (default), 'tcp', or 'local' (defer to installed TwinCAT router).")] string transport = "mqtt",
+        [Description("Required for transport='tcp': IP/hostname of the PLC. Ignored for MQTT and local.")] string? target_ip = null,
         [Description("Optional route name for the registered TCP_IP route. Defaults to 'mcp-<netId>'.")] string? route_name = null,
         [Description("MQTT broker host override (transport='mqtt').")] string? mqtt_broker = null,
         [Description("MQTT broker port override (transport='mqtt').")] int? mqtt_port = null,
@@ -189,7 +195,21 @@ public sealed class DiscoveryTools
         try
         {
             TwinCAT.Ads.IAdsConnection conn;
-            if (t == "tcp")
+            if (t == "local")
+            {
+                if (!_localRouter.IsPresent)
+                    return new
+                    {
+                        success = false,
+                        error = "transport='local' requested but no installed TwinCAT router was detected.",
+                        port_48898_in_use = _localRouter.Port48898InUse,
+                        tc_sys_srv_running = _localRouter.TcSysSrvRunning,
+                        hint = "Install TwinCAT (or run TcSysSrv) on this machine, or use transport='mqtt'/'tcp'.",
+                    };
+                conn = _ads.ConfigureLocalRouter(target_net_id, target_port);
+                overrideApplied = true;
+            }
+            else if (t == "tcp")
             {
                 if (string.IsNullOrWhiteSpace(target_ip))
                     return new
@@ -197,6 +217,15 @@ public sealed class DiscoveryTools
                         success = false,
                         error = "transport='tcp' requires target_ip (IP/hostname of the PLC).",
                         hint = "Use beckhoff_discover_network to find the IP for a given AmsNetId.",
+                    };
+                if (_localRouter.IsPresent)
+                    return new
+                    {
+                        success = false,
+                        error = $"transport='tcp' cannot start an in-process AmsTcpIpRouter: a local Beckhoff router is already running ({_localRouter.Reason}).",
+                        port_48898_in_use = _localRouter.Port48898InUse,
+                        tc_sys_srv_running = _localRouter.TcSysSrvRunning,
+                        hint = "Use transport='local' to defer to the installed router (and its existing routes), or stop TcSysSrv first.",
                     };
                 conn = _ads.ConfigureTcp(target_net_id, target_port, target_ip!, route_name);
                 overrideApplied = true;
@@ -233,6 +262,10 @@ public sealed class DiscoveryTools
                 tcp_router_running = _ads.TcpRouterRunning,
                 local_net_id = _ads.LocalNetId,
                 local_name = _ads.LocalName,
+                local_router_detected = _localRouter.IsPresent,
+                port_48898_in_use = _localRouter.Port48898InUse,
+                tc_sys_srv_running = _localRouter.TcSysSrvRunning,
+                installed_net_id = _localRouter.InstalledNetId,
                 backroute_hint = t == "tcp"
                     ? $"For TCP transport the PLC must have a static <Route> entry for our NetId '{_ads.LocalNetId}'. Without it the PLC silently drops AMS frames (visible as ClientSyncTimeOut)."
                     : null,
@@ -254,13 +287,22 @@ public sealed class DiscoveryTools
                 transport = t,
                 target_ip,
                 local_net_id = _ads.LocalNetId,
+                local_router_detected = _localRouter.IsPresent,
+                port_48898_in_use = _localRouter.Port48898InUse,
+                tc_sys_srv_running = _localRouter.TcSysSrvRunning,
+                installed_net_id = _localRouter.InstalledNetId,
                 mqtt_override_applied = overrideApplied,
                 active_broker = _ads.ActiveMqttBroker,
                 active_topic = _ads.ActiveMqttTopic,
                 error = ex.Message,
-                hint = t == "tcp"
-                    ? $"Verify target_ip:48898 is reachable AND the PLC has a static backroute for our local AmsNetId '{_ads.LocalNetId}'. Add a <Route> with NetId='{_ads.LocalNetId}' Type='TCP_IP' on the PLC, otherwise AMS frames are silently dropped."
-                    : "Verify the AmsNetId is reachable via the configured MQTT broker. Use beckhoff_discover to list peers.",
+                hint = t switch
+                {
+                    "tcp" => $"Verify target_ip:48898 is reachable AND the PLC has a static backroute for our local AmsNetId '{_ads.LocalNetId}'. Add a <Route> with NetId='{_ads.LocalNetId}' Type='TCP_IP' on the PLC, otherwise AMS frames are silently dropped.",
+                    "local" => $"Verify the installed router has a route to {target_net_id} (TwinCAT XAE → Routes, or StaticRoutes.xml). Local NetId in use: '{_ads.LocalNetId}'.",
+                    _ => _localRouter.IsPresent
+                        ? $"A local Beckhoff router is installed ({_localRouter.Reason}) — try transport='local' instead of '{t}'."
+                        : "Verify the AmsNetId is reachable via the configured MQTT broker. Use beckhoff_discover to list peers.",
+                },
             };
         }
     }

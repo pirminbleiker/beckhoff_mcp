@@ -52,6 +52,7 @@ public static class Program
         builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
         builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
 
+        builder.Services.AddSingleton<LocalRouterDetector>();
         builder.Services.AddSingleton<AdsConnectionManager>();
         builder.Services.AddSingleton<NetworkDiscovery>();
         builder.Services.AddSingleton<TraceService>();

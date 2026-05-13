@@ -116,7 +116,7 @@ Tests every tool end-to-end against discoverable targets.
 | Category | Tools |
 |----------|-------|
 | Discovery | `beckhoff_discover` (MQTT broker scan), `beckhoff_discover_network` (UDP 48899 + TCP scan) |
-| Connection | `beckhoff_connect` (with broker/topic override), `beckhoff_connection_status` |
+| Connection | `beckhoff_connect` (`transport=mqtt`/`tcp`/`local`, with broker/topic override), `beckhoff_connection_status` |
 | Device | `beckhoff_get_device_info`, `beckhoff_get_device_state` (both accept `port` override) |
 | Symbols | `beckhoff_list_symbols` (substring + regex + `parent_path` scope), `beckhoff_get_symbol_info` |
 | Read | `beckhoff_read_variable`, `beckhoff_read_variables` (explicit list **or** regex pattern) |
@@ -139,6 +139,8 @@ Tests every tool end-to-end against discoverable targets.
 3. beckhoff_connect(target_net_id,            → set active target + broker
                     mqtt_broker, mqtt_topic)
    ↳ returns runtime AND system_service status simultaneously
+   ↳ also returns local_router_detected — if true, retry with
+     transport='local' to use the installed TwinCAT router's routes
 
 4. beckhoff_list_symbols(pattern=...)         → discover variables
 5. beckhoff_read_variables(pattern=...)       → bulk read by regex

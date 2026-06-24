@@ -10,6 +10,21 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
+        // Last-resort diagnostics: a fault on a background thread/task (e.g. the
+        // in-process AmsTcpIpRouter receive loop choking on a truncated AMS
+        // frame over a lossy link) can tear down the whole process, which the
+        // MCP client only sees as an opaque "-32000 Connection closed". Surface
+        // the real stack trace on stderr (stdout is reserved for JSON-RPC) so
+        // such crashes are diagnosable instead of silent. SetObserved keeps an
+        // unobserved task exception from escalating to a process kill.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Console.Error.WriteLine($"[FATAL] UnhandledException (terminating={e.IsTerminating}): {e.ExceptionObject}");
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            Console.Error.WriteLine($"[FATAL] UnobservedTaskException: {e.Exception}");
+            e.SetObserved();
+        };
+
         // Anchor the content root to the directory the exe lives in. Without
         // this the host uses Directory.GetCurrentDirectory(), which means a
         // persistent appsettings.json is missed when Claude Desktop launches

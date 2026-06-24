@@ -252,6 +252,15 @@ public sealed class DiscoveryTools
                 systemService = new { ok = false, error = ex.Message };
             }
 
+            // Prime the symbol-server upload on the target port in the
+            // background. The first SymbolLoaderFactory call on a freshly opened
+            // session returns an empty table — the upload only completes across
+            // an ADS request/invocation boundary. Triggering it here (a separate
+            // invocation from the user's later beckhoff_list_symbols) means that
+            // first real symbol call returns the full table instead of empty.
+            // Fire-and-forget so connect latency is unaffected.
+            _ = Task.Run(() => _ads.WarmupSymbols());
+
             return new
             {
                 success = true,

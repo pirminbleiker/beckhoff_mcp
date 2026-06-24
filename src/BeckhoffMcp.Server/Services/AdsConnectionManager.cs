@@ -1,9 +1,12 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.Memory;
 using Microsoft.Extensions.Logging;
+using TwinCAT;
 using TwinCAT.Ads;
 using TwinCAT.Ads.Configuration;
 using TwinCAT.Ads.TcpRouter;
+using TwinCAT.Ads.TypeSystem;
+using TwinCAT.TypeSystem;
 
 namespace BeckhoffMcp.Server.Services;
 
@@ -439,7 +442,170 @@ public sealed class AdsConnectionManager : IAsyncDisposable
 
     public IAdsConnection EnsureConnected() => EnsureConnectedTo(TargetNetId, TargetPort);
 
+    /// <summary>
+    /// Tears down the active ADS session without touching the router or target
+    /// intent. Use after an ADS timeout: a timed-out request may have left a
+    /// partial AMS frame in the TCP receive buffer, which would corrupt the
+    /// next response if the same connection object is reused. The next call to
+    /// EnsureConnected() will open a fresh session with a clean TCP stream.
+    /// </summary>
+    public void InvalidateConnection()
+    {
+        lock (_lock)
+        {
+            try { _connection?.Disconnect(); } catch { }
+            _session?.Dispose();
+            _session = null;
+            _connection = null;
+            _currentTargetNetId = null;
+            _currentTargetPort = 0;
+        }
+    }
+
     private readonly Dictionary<int, AdsSession> _portSessions = new();
+
+    // ---- Symbol table cache (singleton-scoped) --------------------------
+    // MCP tool types are instantiated per-call, so a cache on SymbolTools is
+    // dead state. The symbol table is therefore cached here, on the singleton
+    // connection manager, so it loads once per target and is reused.
+    private readonly object _symLock = new();      // guards the cache fields only
+    private readonly object _loadLock = new();      // serialises the slow load IO
+    private ISymbolCollection<ISymbol>? _cachedSymbols;
+    private string _cachedSymbolsKey = string.Empty;
+    private object? _lastSymbolLoadDiag;
+
+    private static SymbolLoaderSettings NewFlatSettings() =>
+        new(SymbolsLoadMode.Flat, TwinCAT.ValueAccess.ValueAccessMode.IndexGroupOffsetPreferred);
+
+    /// <summary>Diagnostics from the most recent (uncached) symbol load.</summary>
+    public object? LastSymbolLoadDiag { get { lock (_symLock) return _lastSymbolLoadDiag; } }
+
+    /// <summary>
+    /// Loads the flat symbol table for the active target, caching it for reuse.
+    /// The symbol-server upload on a freshly opened AdsSession only completes
+    /// across an ADS request/invocation boundary — in-call retries never warm
+    /// it (proven: 12 attempts over ~8.7 s all returned 0, yet the next tool
+    /// invocation succeeds on attempt 1). So this does NOT loop hopefully: it
+    /// tries a small number of times and relies on <see cref="WarmupSymbols"/>
+    /// being called at connect time to prime the session beforehand.
+    /// </summary>
+    public ISymbolCollection<ISymbol> GetSymbols(int maxAttempts = 2)
+    {
+        var key = $"{TargetNetId}:{TargetPort}";
+
+        // Fast path: cache hit, no load needed.
+        lock (_symLock)
+        {
+            if (_cachedSymbols is not null && _cachedSymbolsKey == key)
+            {
+                _lastSymbolLoadDiag = new { cached = true, count = _cachedSymbols.Count };
+                return _cachedSymbols;
+            }
+        }
+
+        // Serialise the slow load so a background warmup and a real call cannot
+        // issue two concurrent symbol uploads on the same connection (which can
+        // corrupt the TCP stream). _loadLock is acquired BEFORE _lock (via
+        // EnsureConnectedToPort) and before _symLock, and nothing acquires
+        // _lock/_symLock then _loadLock — so no lock-ordering inversion.
+        lock (_loadLock)
+        {
+            // Re-check: another caller may have populated the cache while we
+            // waited for _loadLock.
+            lock (_symLock)
+            {
+                if (_cachedSymbols is not null && _cachedSymbolsKey == key)
+                {
+                    _lastSymbolLoadDiag = new { cached = true, count = _cachedSymbols.Count };
+                    return _cachedSymbols;
+                }
+            }
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var perAttempt = new List<int>();
+            ISymbolCollection<ISymbol> syms = new SymbolCollection();
+            try
+            {
+                var conn = EnsureConnectedToPort(TargetPort);
+                conn.ReadState();
+                for (var attempt = 1; attempt <= Math.Max(1, maxAttempts); attempt++)
+                {
+                    var loader = SymbolLoaderFactory.Create(conn, NewFlatSettings());
+                    syms = loader.Symbols;
+                    perAttempt.Add(syms.Count);
+                    if (syms.Count > 0) break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "GetSymbols failed for {Key}", key);
+                lock (_symLock)
+                {
+                    _lastSymbolLoadDiag = new { cached = false, error = ex.Message, elapsedMs = sw.ElapsedMilliseconds };
+                    return _cachedSymbols ?? syms;
+                }
+            }
+
+            lock (_symLock)
+            {
+                if (syms.Count > 0)
+                {
+                    _cachedSymbols = syms;
+                    _cachedSymbolsKey = key;
+                }
+                _lastSymbolLoadDiag = new
+                {
+                    cached = false,
+                    finalCount = syms.Count,
+                    attempts = perAttempt.Count,
+                    perAttempt,
+                    elapsedMs = sw.ElapsedMilliseconds,
+                };
+                return syms.Count > 0 ? syms : (_cachedSymbols ?? syms);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Primes the symbol-server upload on the target's port session so the
+    /// first real <see cref="GetSymbols"/> call (a later, separate tool
+    /// invocation) returns the full table instead of an empty one. Best-effort;
+    /// never throws. Call this at connect time.
+    /// </summary>
+    public void WarmupSymbols()
+    {
+        try { GetSymbols(1); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Resolves a single symbol by its full instance path WITHOUT reading its
+    /// value. The returned <see cref="ISymbol"/> exposes lazily-generated
+    /// <c>SubSymbols</c> (struct fields / array elements) from the local type
+    /// table, which a recursive search can walk. Resolution is server-side so
+    /// it works for nested members that are NOT in the published flat symbol
+    /// table (e.g. <c>FastPRG_1.fbTRM.CIf.Job.strState</c>). Returns null when
+    /// the path cannot be resolved (e.g. ADS 1808 "symbol not found").
+    /// </summary>
+    public ISymbol? ResolveSymbol(string path)
+    {
+        try
+        {
+            return (EnsureConnected() as AdsConnection)?.ReadSymbol(path);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void ClearSymbolCacheLocked()
+    {
+        lock (_symLock)
+        {
+            _cachedSymbols = null;
+            _cachedSymbolsKey = string.Empty;
+        }
+    }
 
     /// <summary>
     /// Opens a fresh connection to the same NetId on a different port. Caller
@@ -456,7 +622,19 @@ public sealed class AdsConnectionManager : IAsyncDisposable
         _log.LogDebug("Opening AdsSession to {Address}", addr);
         var session = new AdsSession(addr, SessionSettings.Default, _config, _loggerFactory, null);
         var conn = (IAdsConnection)session.Connect();
+        ApplyDefaultTimeout(conn);
         return (conn, session);
+    }
+
+    // The AdsConnection sync timeout defaults to 5 s, which is too short for a
+    // VPN-tunnelled link and surfaces as intermittent ClientSyncTimeOut. Raise
+    // it on every connection we open; per-read tool calls may tighten it again.
+    private const int DefaultAdsTimeoutMs = 30000;
+
+    private static void ApplyDefaultTimeout(IAdsConnection conn)
+    {
+        if (conn is AdsConnection ac)
+            ac.Timeout = DefaultAdsTimeoutMs;
     }
 
     /// <summary>
@@ -502,6 +680,7 @@ public sealed class AdsConnectionManager : IAsyncDisposable
 
             _session = new AdsSession(addr, SessionSettings.Default, _config, _loggerFactory, null);
             _connection = (IAdsConnection)_session.Connect();
+            ApplyDefaultTimeout(_connection);
             _currentTargetNetId = netId;
             _currentTargetPort = port;
             return _connection;
@@ -526,6 +705,7 @@ public sealed class AdsConnectionManager : IAsyncDisposable
             try { s.Dispose(); } catch { }
         }
         _portSessions.Clear();
+        ClearSymbolCacheLocked();
     }
 
     public ValueTask DisposeAsync()

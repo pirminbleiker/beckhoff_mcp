@@ -45,6 +45,15 @@ pre-built release download and configuration: **[docs/getting-started.md](docs/g
 | [Architecture](docs/architecture.md) | How the server talks to the PLC, and why it ended up on this design |
 | [Troubleshooting](docs/troubleshooting.md) | Error codes, timeouts, symbol-table quirks |
 
+## Origin
+
+This project started as a fork of
+[malcolm-mill/beckhoff_mcp](https://github.com/malcolm-mill/beckhoff_mcp), a
+Python/`pyads`-based, read-only Beckhoff ADS MCP server. It has since been
+rewritten from scratch in C#/.NET (see below) and now covers read/write,
+RPC, tracing, EtherCAT diagnostics, and route management as well — but
+credit for the original idea and starting point belongs there.
+
 ## Why .NET (and not pyads)?
 
 `pyads` on Windows uses `TcAdsDll.dll`, which talks to the local TwinCAT
@@ -74,6 +83,14 @@ Releases are produced by `.github/workflows/release.yml`:
   `PublishSingleFile` + `IncludeAllContentForSelfExtract` settings), and
   attaches `beckhoff-mcp-<tag>-win-x64.exe` plus a `.sha256` to the release.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues: see
+[SECURITY.md](SECURITY.md) instead of a public issue. This project follows
+a [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
-See [LICENSE](LICENSE).
+See [LICENSE](LICENSE). This project started as a fork — see
+[Origin](#origin) — and the original copyright notice is preserved as the
+MIT license requires.

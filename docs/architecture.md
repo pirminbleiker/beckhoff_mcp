@@ -134,9 +134,12 @@ pattern from the official Beckhoff library.
 
 ## Why this architecture
 
-The repo went through several iterations before landing here. Each stop
-along the way (paths below refer to code that has since been removed from
-this repo — see git history) is summarized in the table:
+This repo started as a fork of
+[malcolm-mill/beckhoff_mcp](https://github.com/malcolm-mill/beckhoff_mcp)
+(Python, `pyads`, read-only) and went through several more iterations
+before landing here. Each stop along the way (paths below refer to code
+that has since been removed from this repo — see git history) is
+summarized in the table:
 
 | Experiment | What it tried | Why it didn't ship |
 |-----------|---------------|--------------------|

@@ -1,5 +1,33 @@
 # Architecture
 
+## Project layout
+
+```
+twincat-ads-mcp/
+└── src/
+    └── BeckhoffMcp.Server/         .NET 8 MCP server (the product)
+        ├── Program.cs
+        ├── appsettings.json
+        ├── Services/
+        │   ├── AdsConnectionManager.cs   AdsSession lifecycle + MQTT-override
+        │   ├── LocalRouterDetector.cs    Detects an already-installed TwinCAT router
+        │   ├── NetworkDiscovery.cs       UDP 48899 + TCP port scanner
+        │   ├── RouteRegistration.cs      UDP/48899 AddRoute wire protocol
+        │   ├── TraceService.cs          ADS-notification subscription pool
+        │   └── WindowsCredentialPrompt.cs  CredUI dialog + Credential Manager (Windows only)
+        └── Tools/
+            ├── DeviceTools.cs            Device info/state (with port-override)
+            ├── DiscoveryTools.cs         discover (MQTT) + discover_network + connect
+            ├── EthercatTools.cs          EtherCAT master diagnostics
+            ├── PortTools.cs              query_ads_port / read_from_port
+            ├── RouteTools.cs             add_route (backroute registration)
+            ├── RpcTools.cs               get_rpc_methods / invoke_rpc
+            ├── SymbolTools.cs            list/read symbols (regex)
+            ├── TraceTools.cs             trace_start / get / stop
+            ├── TypeTools.cs              get_type_info / dereference
+            └── WriteTools.cs             write_variable(s) / write_control
+```
+
 ## Final stack
 
 ```mermaid
@@ -8,7 +36,7 @@ graph TB
 
     subgraph MCP["beckhoff-mcp.exe (.NET 8)"]
         STDIO["JSON-RPC stdio"]
-        TOOLS["26 ADS tools<br/>(Tools/*.cs)"]
+        TOOLS["27 ADS tools<br/>(Tools/*.cs)"]
         MGR["AdsConnectionManager<br/>(per-port AdsSession cache)"]
         DISCO["NetworkDiscovery<br/>(UDP 48899 + TCP scan)"]
         TRACE["TraceService<br/>(notification sessions)"]
@@ -107,8 +135,8 @@ pattern from the official Beckhoff library.
 ## Why this architecture
 
 The repo went through several iterations before landing here. Each stop
-along the way (paths below refer to code that has since been removed —
-see git history) is summarized in the table:
+along the way (paths below refer to code that has since been removed from
+this repo — see git history) is summarized in the table:
 
 | Experiment | What it tried | Why it didn't ship |
 |-----------|---------------|--------------------|
@@ -120,7 +148,7 @@ see git history) is summarized in the table:
 The key insight: **once the client code is .NET, the AdsOverMqtt plugin is the
 shortest path** — it's the only Beckhoff-supported way of running an
 ADS-over-MQTT-only stack without any local Beckhoff service. Rewriting the MCP
-in C# (which we did) removed the need for everything in `archive/experiments/`.
+in C# (which we did) removed the need for everything in the table above.
 
 ## What couldn't be ported from the sister project
 
@@ -128,58 +156,19 @@ The sister project `Avm.Swiss.TwinCAT.CLI` has many tools that depend on
 TwinCAT XAE (the engineering shell) via COM automation: `BuildTools`,
 `ProjectTools`, `PouTools`, `LibraryTools`, `RuntimeTools`, `SafetyTools`,
 `DialogTools`, `OutputPaneTools`, `SaveTools`, `TaskTools`, `TargetPlatformTools`,
-`SessionTools`, `RouteTools`, `ComExplorerTools`. These are excluded by design
-— they would re-introduce the XAE dependency we built this server to avoid.
+`SessionTools`, `RouteTools` (the sister project's XAE-dialog-based route
+manager — not the same class as this repo's own `RouteTools.cs`, which
+registers routes over the ADS UDP/48899 wire protocol without any XAE/COM
+dependency, see [`beckhoff_add_route`](tools-reference.md#beckhoff_add_route--registering-a-backroute-windows-only)),
+`ComExplorerTools`. These are excluded by design — they would re-introduce
+the XAE dependency we built this server to avoid.
 
 What did get ported: every tool that talks to a running PLC over ADS
 (read, write, RPC, type introspection, trace, EtherCAT diagnostics, route
-discovery, connect with broker switch).
+registration, connect with broker switch).
 
-## Configuration semantics
+## Related
 
-| Source | Loads | Notes |
-|--------|-------|-------|
-| `appsettings.json` | Local fallback NetId, default target, MQTT broker config | Read at startup; persisted between runs |
-| `connect()` overrides | `mqtt_broker`, `mqtt_port`, `mqtt_topic` | In-memory only; rebuilds `GlobalConfiguration` and drops the stale AdsSession atomically under one lock |
-| Auto-generated | `AmsRouter:NetId` if missing | One random `10.x.y.z.1.1` per process |
-
-`connect()` is the single entry point for changing target + broker at runtime.
-It applies overrides, sets the intent target (so concurrent calls see the
-new target immediately), then opens a fresh `AdsSession` — all under one lock.
-
-## Transports
-
-`beckhoff_connect` exposes three transports, picked via `transport=`:
-
-| Value | Path | When |
-|-------|------|------|
-| `mqtt` (default) | AdsOverMqtt MEF plugin — frames go via an external MQTT broker, no router process | Default. Works on hosts where TwinCAT is not installed. |
-| `tcp` | Starts an in-process `AmsTcpIpRouter` bound to 48898 and routes via TCP/IP. Needs `target_ip` + a backroute on the PLC for our local NetId | Useful when MQTT isn't an option and TwinCAT is not installed locally |
-| `local` | No in-process router, no MQTT override — defers to an already-installed TwinCAT router on this machine and uses the routes it already knows | Use on Beckhoff IPCs or engineering workstations where TwinCAT is installed |
-
-`LocalRouterDetector` runs at startup and reports two signals:
-
-- `port_48898_in_use` — something else (typically `TcSysSrv.exe`) already owns 48898 locally
-- `tc_sys_srv_running` — the TwinCAT System Service is installed and `Running`
-
-If either is true, `transport='tcp'` is refused (binding 48898 would fail
-anyway) and the error response points the agent at `transport='local'`.
-The detector signals are also surfaced verbatim in every `beckhoff_connect`
-response so the agent can pick the right transport without trial-and-error.
-
-The `local` transport positively sets `AmsRouter:ChannelProtocol=Ads` (so the
-embedded default `AdsOverMqtt` does not bleed through) and clears the MQTT
-overrides — `Beckhoff.TwinCAT.Ads` then uses its default channel discovery
-(PInvoke / UnixSocket / TCP loopback to 48898, whichever the installed router
-exposes). The local AmsNetId is read from the registry
-(`HKLM\SOFTWARE\Beckhoff\TwinCAT3\System\AmsNetId`, 32-bit view) when
-available so the installed router accepts our frames without a manual route
-edit.
-
-> **Not yet verified on a real TwinCAT-installed host.** The intent is that
-> `transport='local'` lets the managed library reach the installed router
-> via whichever IPC channel it auto-discovers; that exact discovery path
-> still needs to be confirmed end-to-end. The detector signals
-> (`local_router_detected`, `port_48898_in_use`, `tc_sys_srv_running`,
-> `installed_net_id`) are always surfaced in the `connect` response so the
-> agent can react if `local` fails.
+- [Configuration](configuration.md) — config layering and the three
+  connection transports in operational detail.
+- [Tools reference](tools-reference.md) — the full tool list.

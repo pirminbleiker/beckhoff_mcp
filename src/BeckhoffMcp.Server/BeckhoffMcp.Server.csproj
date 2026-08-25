@@ -48,13 +48,15 @@
   </ItemGroup>
 
   <!--
-    PublishSingleFile is intentionally false. Beckhoff's TwinCAT.Ads.Server
-    composition does
+    Note on the MEF/single-file interaction this used to break on: Beckhoff's
+    TwinCAT.Ads.Server composition does
         Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
     to locate the MEF plugin directory, which yields null for assemblies
-    loaded from a single-file bundle. The result is a SafeDirectoryCatalog
-    crash and "No IAmsServerFactory for protocol AdsOverMqtt:All found".
-    Until that's fixed upstream we ship as multi-file so MEF can discover
-    AdsOverMqtt.dll on disk.
+    loaded straight out of a single-file bundle (no self-extract) — causing a
+    SafeDirectoryCatalog crash ("No IAmsServerFactory for protocol
+    AdsOverMqtt:All found"). IncludeAllContentForSelfExtract above avoids
+    this: content is unpacked to %TEMP%/.net/<hash>/ on first launch, so
+    Assembly.Location resolves to a real directory that also contains
+    TwinCAT.Ads.AdsOverMqtt.dll, and MEF discovery works.
   -->
 </Project>

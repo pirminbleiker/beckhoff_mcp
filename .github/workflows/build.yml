@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        working-directory: src/BeckhoffMcp.Server
+        run: dotnet restore
+
+      - name: Build (Release)
+        working-directory: src/BeckhoffMcp.Server
+        run: dotnet build -c Release --no-restore
+
+      - name: Publish (single-file, win-x64) — sanity check
+        shell: pwsh
+        working-directory: src/BeckhoffMcp.Server
+        run: |
+          dotnet publish -c Release -o ci-publish
+          if (-not (Test-Path 'ci-publish/beckhoff-mcp.exe')) {
+            throw 'beckhoff-mcp.exe not found in publish output'
+          }
+          $files = Get-ChildItem ci-publish
+          if ($files.Count -ne 1 -or $files[0].Name -ne 'beckhoff-mcp.exe') {
+            throw "Expected a single exe in ci-publish/, got: $($files | ForEach-Object Name -join ', ')"
+          }

@@ -106,8 +106,9 @@ pattern from the official Beckhoff library.
 
 ## Why this architecture
 
-The repo went through several iterations before landing here. The
-`archive/experiments/` folder documents each stop on the way:
+The repo went through several iterations before landing here. Each stop
+along the way (paths below refer to code that has since been removed —
+see git history) is summarized in the table:
 
 | Experiment | What it tried | Why it didn't ship |
 |-----------|---------------|--------------------|

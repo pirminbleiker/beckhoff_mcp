@@ -105,11 +105,10 @@ The path must point at the extracted `beckhoff-mcp.exe`. The MCP picks up
 
 ### 4. Verify
 
-```powershell
-python test_full_suite.py
-```
-
-Tests every tool end-to-end against discoverable targets.
+No bundled test script — verify manually via an MCP client (e.g. Claude
+Desktop): call `beckhoff_discover_network` / `beckhoff_connect`, then a
+`beckhoff_list_symbols` / `beckhoff_read_variables` round-trip against a
+reachable target.
 
 ## Tool surface
 
@@ -157,7 +156,7 @@ instead of writing a custom router or bridge.
 ## Project layout
 
 ```
-beckhoff_mcp/
+twincat-ads-mcp/
 ├── src/
 │   └── BeckhoffMcp.Server/         .NET 8 MCP server (the product)
 │       ├── Program.cs
@@ -176,12 +175,7 @@ beckhoff_mcp/
 │           ├── DiscoveryTools.cs         discover (MQTT) + connect
 │           ├── EthercatTools.cs          EtherCAT master diagnostics
 │           └── PortTools.cs              query_ads_port / read_from_port
-├── test_full_suite.py                Tool exerciser (multi-target)
-├── ARCHITECTURE.md                    Architecture & design history
-└── archive/                           Earlier experiments (kept for reference)
-    ├── experiments/                       AdsRouter, AdsBridge, AdsTestClient (TC1000-style attempts)
-    ├── python-mcp/                        Original pyads-based MCP (superseded)
-    └── probes/                             Diagnostic scripts used during bring-up
+└── ARCHITECTURE.md                    Architecture & design history (incl. earlier experiments, since removed — see git history)
 ```
 
 ## Why .NET (and not pyads)?
@@ -196,10 +190,11 @@ the .NET client publishes AMS frames directly to a configurable MQTT broker
 and the PLC receives them through its own MQTT subscription. No router
 service needed; no TwinCAT install needed; no firewall holes for port 48898.
 
-The trade-off: client code is C#, not Python. The full `archive/` folder
+The trade-off: client code is C#, not Python. [ARCHITECTURE.md](ARCHITECTURE.md#why-this-architecture)
 documents the experiments (custom TCP router, custom TCP↔MQTT bridge, drop-in
 DLL replacement) that explored other paths before settling on the .NET
-direct-broker route.
+direct-broker route; the experimental code itself has since been removed
+from the repo (see git history).
 
 ## Releases
 

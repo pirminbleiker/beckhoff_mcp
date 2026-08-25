@@ -4,11 +4,6 @@ obj/
 publish*/
 *.user
 
-# Python
-__pycache__/
-*.pyc
-.venv/
-
 # IDE
 .vs/
 .vscode/
@@ -18,6 +13,3 @@ __pycache__/
 *.log
 /tmp/
 *.bak
-
-# Proprietary Beckhoff DLLs (EULA-restricted)
-archive/experiments/TwinCAT/

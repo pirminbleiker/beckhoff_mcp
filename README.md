@@ -44,6 +44,7 @@ pre-built release download and configuration: **[docs/getting-started.md](docs/g
 | [Configuration](docs/configuration.md) | Config layering/override precedence, the three connection transports |
 | [Architecture](docs/architecture.md) | How the server talks to the PLC, and why it ended up on this design |
 | [Troubleshooting](docs/troubleshooting.md) | Error codes, timeouts, symbol-table quirks |
+| [Dependency Decisions](docs/dependency-decisions.md) | Why each third-party dependency was adopted, source/signature checks |
 
 ## Origin
 
